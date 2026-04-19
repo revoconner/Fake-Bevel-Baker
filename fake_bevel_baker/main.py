@@ -10,8 +10,10 @@ Example:
 from __future__ import annotations
 
 import argparse
+import struct
 import sys
 import time
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -22,15 +24,39 @@ from .mesh_prep import prepare_mesh
 from .uv_raster import rasterize_uvs
 
 
+def _png_chunk(tag: bytes, data: bytes) -> bytes:
+    return (
+        struct.pack(">I", len(data))
+        + tag + data
+        + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    )
+
+
+def _write_png_rgb16(path: Path, img_uint16: np.ndarray) -> None:
+    """Write a 16-bit RGB PNG. Pillow can't, imageio plugins not installed."""
+    if img_uint16.dtype != np.uint16 or img_uint16.ndim != 3 or img_uint16.shape[2] != 3:
+        raise ValueError("expected (H, W, 3) uint16 image")
+    h, w, _ = img_uint16.shape
+    be = img_uint16.astype(">u2").tobytes()
+    row_bytes = w * 3 * 2
+    body = bytearray()
+    for y in range(h):
+        body.append(0)  # filter type: None
+        body.extend(be[y * row_bytes : (y + 1) * row_bytes])
+    compressed = zlib.compress(bytes(body), 6)
+
+    ihdr = struct.pack(">IIBBBBB", w, h, 16, 2, 0, 0, 0)  # 16-bit, color_type 2 = RGB
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n")
+        f.write(_png_chunk(b"IHDR", ihdr))
+        f.write(_png_chunk(b"IDAT", compressed))
+        f.write(_png_chunk(b"IEND", b""))
+
+
 def _write_png(path: Path, img_uint16: np.ndarray) -> None:
-    try:
-        import imageio.v3 as iio
-    except ImportError as e:
-        raise RuntimeError("imageio not installed") from e
-    # Flip vertically so v=0 UV row is at the bottom of the saved image
-    # (standard PNG convention: row 0 = top; our raster has v=0 at row 0).
-    img_flipped = img_uint16[::-1]
-    iio.imwrite(str(path), img_flipped)
+    # Flip vertically so v=0 UV row sits at the bottom of the saved image
+    # (PNG rows go top-down; our raster has v=0 at row 0).
+    _write_png_rgb16(path, img_uint16[::-1])
 
 
 def _write_exr(path: Path, img_float: np.ndarray) -> None:
