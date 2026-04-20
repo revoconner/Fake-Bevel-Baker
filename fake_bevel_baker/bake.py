@@ -1,6 +1,7 @@
-"""Stage 5: per-texel bevel bake.
+"""
+per-texel bevel bake.
 
-Port of Blender Cycles `svm_bevel`. For each valid texel we shoot
+For each valid texel we shoot
 `num_samples` probe rays on a BSSRDF-weighted disk around the shading
 point, gather multi-hit normals through Embree, MIS-combine across the
 3-axis disk frame, and average. World-space result is then rotated into

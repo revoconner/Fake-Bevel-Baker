@@ -1,4 +1,5 @@
-"""Stage 6: edge padding for UV islands.
+"""
+edge padding for UV islands.
 
 Invalid texels within `radius_px` of a valid texel inherit the nearest
 valid value. One `distance_transform_edt` call does distance + nearest

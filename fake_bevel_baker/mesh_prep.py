@@ -1,4 +1,5 @@
-"""Stage 1: mesh ingestion + split-by-angle.
+"""
+mesh ingestion + split-by-angle.
 
 Loads a mesh, preserves per-corner (position / uv / normal) data so UV
 seams and hard-edge normal seams are not silently merged, then produces:

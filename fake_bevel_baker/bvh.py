@@ -1,4 +1,5 @@
-"""Stage 2: Embree BVH wrapper with multi-hit support.
+"""
+Embree BVH wrapper with multi-hit support.
 
 `embreex` 0.1.6 binds Embree 2 and only exposes `rtcIntersect` /
 `rtcOccluded`; the intersection filter callback API is not reachable

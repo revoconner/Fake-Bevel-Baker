@@ -1,4 +1,4 @@
-"""Stage 3: UV rasterization.
+"""UV rasterization.
 
 Walk each UV triangle's bounding box and record
 (triangle_index, bary_u, bary_v, bary_w) for every covered texel. First

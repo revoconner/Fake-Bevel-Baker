@@ -1,9 +1,4 @@
-"""Stage 4 pre-req: MikkTSpace tangents via ctypes against the reference C.
-
-The `pygltfio` package listed in the spec does not provide a
-MikkTSpace binding (it is a glTF parser). We build the reference
-implementation into a shared library via
-`fake_bevel_baker.native.build_mikkt` and load it here.
+"""MikkTSpace tangents via ctypes against the reference C.
 
 Output is per-face-corner `(xyz, sign)`. Callers should interpolate
 tangents using the texel's face index + barycentrics (do NOT average
