@@ -20,6 +20,7 @@ import numpy as np
 
 from .bake import bake, encode_normal_to_uint16
 from .bvh import BVH
+from .dilation import dilate
 from .mesh_prep import prepare_mesh
 from .uv_raster import rasterize_uvs
 
@@ -81,6 +82,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=0, help="RNG seed (default 0)")
     p.add_argument("--format", choices=("png", "exr"), default="png",
                    help="Output format (default png = 16-bit)")
+    p.add_argument("--dilation", type=int, default=16,
+                   help="Edge padding ring width in texels (default 16, 0 disables)")
     args = p.parse_args(argv)
 
     mesh_path = Path(args.mesh)
@@ -129,16 +132,24 @@ def main(argv: list[str] | None = None) -> int:
     t_bake = time.time() - t1
     print(f"Bake done in {t_bake:.2f}s")
 
+    tan_img = result.tangent_normal
+    world_img = result.world_normal
+    if args.dilation > 0:
+        td = time.time()
+        tan_img, _ = dilate(tan_img, result.valid, radius_px=args.dilation)
+        world_img, _ = dilate(world_img, result.valid, radius_px=args.dilation)
+        print(f"Dilation ({args.dilation}px): {time.time() - td:.2f}s")
+
     if args.format == "png":
         print(f"Writing 16-bit PNG: {out_path}")
-        _write_png(out_path, encode_normal_to_uint16(result.tangent_normal))
+        _write_png(out_path, encode_normal_to_uint16(tan_img))
         if args.out_world:
-            _write_png(Path(args.out_world), encode_normal_to_uint16(result.world_normal))
+            _write_png(Path(args.out_world), encode_normal_to_uint16(world_img))
     else:
         print(f"Writing EXR: {out_path}")
-        _write_exr(out_path, result.tangent_normal)
+        _write_exr(out_path, tan_img)
         if args.out_world:
-            _write_exr(Path(args.out_world), result.world_normal)
+            _write_exr(Path(args.out_world), world_img)
 
     print(f"Total: {time.time() - t0:.2f}s")
     return 0

@@ -84,32 +84,55 @@ class BVH:
         out_Ng = np.zeros((N, max_hits, 3), dtype=np.float32)
         hit_count = np.zeros(N, dtype=np.int32)
 
+        # Compact alive rays between iterations: scene.run() is the hot call
+        # and we should only feed it rays still in flight. `active_idx` maps
+        # positions in the compact batch back to the original (N-sized) slots.
+        active_idx = np.nonzero(alive)[0]
+        comp_origin = cur_origin[active_idx]
+        comp_dir = cur_dir[active_idx]
+
         for hit_i in range(max_hits):
-            if not alive.any():
+            if active_idx.size == 0:
                 break
 
-            r = self.scene.run(cur_origin, cur_dir, query="INTERSECT", output=True)
+            r = self.scene.run(comp_origin, comp_dir, query="INTERSECT", output=True)
             pid = r["primID"]
             tfar = r["tfar"]
 
-            budget_slack = np.maximum(remaining * _EPS_REL, _EPS_ABS)
-            hit_mask = alive & (pid != -1) & (tfar <= remaining + budget_slack)
+            rem_active = remaining[active_idx]
+            budget_slack = np.maximum(rem_active * _EPS_REL, _EPS_ABS)
+            comp_hit_mask = (pid != -1) & (tfar <= rem_active + budget_slack)
 
-            idx = np.where(hit_mask)[0]
-            if idx.size:
-                out_t[idx, hit_i] = cumulative[idx] + tfar[idx]
-                out_pid[idx, hit_i] = pid[idx]
-                out_u[idx, hit_i] = r["u"][idx]
-                out_v[idx, hit_i] = r["v"][idx]
-                out_Ng[idx, hit_i] = r["Ng"][idx]
-                hit_count[idx] += 1
+            comp_idx = np.nonzero(comp_hit_mask)[0]
+            if comp_idx.size:
+                orig_idx = active_idx[comp_idx]
+                t_hits = tfar[comp_idx]
+                out_t[orig_idx, hit_i] = cumulative[orig_idx] + t_hits
+                out_pid[orig_idx, hit_i] = pid[comp_idx]
+                out_u[orig_idx, hit_i] = r["u"][comp_idx]
+                out_v[orig_idx, hit_i] = r["v"][comp_idx]
+                out_Ng[orig_idx, hit_i] = r["Ng"][comp_idx]
+                hit_count[orig_idx] += 1
 
-                step = tfar[idx] + np.maximum(tfar[idx] * _EPS_REL, _EPS_ABS)
-                cur_origin[idx] = cur_origin[idx] + cur_dir[idx] * step[:, None]
-                cumulative[idx] += step
-                remaining[idx] -= step
+                step = t_hits + np.maximum(t_hits * _EPS_REL, _EPS_ABS)
+                # Update accounting only for rays that hit and still have budget;
+                # build the next compact batch from those survivors.
+                new_remaining = remaining[orig_idx] - step
+                remaining[orig_idx] = new_remaining
+                cumulative[orig_idx] += step
 
-            alive = hit_mask & (remaining > 0.0)
+                survive_mask = new_remaining > 0.0
+                if hit_i + 1 < max_hits and survive_mask.any():
+                    surv_comp = comp_idx[survive_mask]
+                    survivors = orig_idx[survive_mask]
+                    new_origin = comp_origin[surv_comp] + comp_dir[surv_comp] * step[survive_mask][:, None]
+                    comp_origin = new_origin
+                    comp_dir = comp_dir[surv_comp]
+                    active_idx = survivors
+                else:
+                    active_idx = np.empty(0, dtype=np.int64)
+            else:
+                break
 
         return MultiHitResult(
             tfar=out_t,
