@@ -3,7 +3,10 @@
 A standalone tool to bake bevels or rounded edges for low poly hard surface models, without needing high poly models. 
 
 <img width="1800" height="auto" alt="2" src="https://github.com/user-attachments/assets/442a6197-fc77-4ad1-991f-71ac627c5532" /> <br>
-<img width="1800" height="auto" alt="1" src="https://github.com/user-attachments/assets/32c2b253-1d78-4e27-a55c-569db02eb3af" /> <br>
+<img width="1800" height="auto" alt="1" src="https://github.com/user-attachments/assets/32c2b253-1d78-4e27-a55c-569db02eb3af" /> <br> <br>
+
+**From left: Low poly with no smoothing, small smoothing radius, high smoothing radius** <br><br>
+
 <img width="1000" height="auto" alt="image" src="https://github.com/user-attachments/assets/40c7203c-0e47-4615-97c1-161083b85236" />
 
 ## How to use
@@ -52,4 +55,4 @@ python.exe -m fake_bevel_baker.main
 
 ## How does it work?
 
-For an indepth explanation of how does it work, read [this.](https://raw.githubusercontent.com/revoconner/fake-bevel-baker/refs/heads/main/explanation.md)
+For an indepth explanation of how does it work, read [this.](explanation.md)
