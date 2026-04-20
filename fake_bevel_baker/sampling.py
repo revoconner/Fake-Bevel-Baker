@@ -1,14 +1,16 @@
 """Sampling primitives ported from Cycles bevel.h.
 
 Cubic BSSRDF falloff + quintic root-find for disk-radius sampling, and
-Halton-based stratified 2D sampling with per-texel Cranley-Patterson
-rotation so rays are decorrelated across texels and stratified across
-the sample index.
+Owen-scrambled Sobol-based stratified 2D sampling with per-texel
+Cranley-Patterson rotation: one scrambled Sobol sequence is shared across
+all texels for sample-wise stratification; each texel gets its own
+random [0,1)^2 offset for texel-to-texel decorrelation.
 """
 
 from __future__ import annotations
 
 import math
+import warnings
 
 import numpy as np
 
@@ -55,23 +57,29 @@ def svm_bevel_cubic_sample(radius: float, xi: np.ndarray) -> tuple[np.ndarray, n
     return r.astype(np.float32), h.astype(np.float32)
 
 
-def _radical_inverse(i: int, base: int) -> float:
-    f = 1.0
-    r = 0.0
-    while i > 0:
-        f /= base
-        r += f * (i % base)
-        i //= base
-    return r
+def sobol_sequence_2d(num_samples: int, seed: int = 0) -> np.ndarray:
+    """Owen-scrambled Sobol sequence in [0, 1)^2.
 
+    Returns (num_samples, 2) float32. scipy warns when num_samples is not a
+    power of 2; Sobol is still correct there, just not balanced across the
+    whole sequence. We suppress the warning and accept the slight imbalance.
+    """
+    from scipy.stats.qmc import Sobol
 
-def halton_2d(s: int) -> tuple[float, float]:
-    return _radical_inverse(s + 1, 2), _radical_inverse(s + 1, 3)
+    sampler = Sobol(d=2, scramble=True, seed=seed)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pts = sampler.random(num_samples)
+    return pts.astype(np.float32)
 
 
 def per_texel_offsets(n: int, seed: int = 0) -> np.ndarray:
-    """Per-texel Cranley-Patterson rotation offsets in [0, 1)^2."""
-    rng = np.random.default_rng(seed)
+    """Per-texel Cranley-Patterson rotation offsets in [0, 1)^2.
+
+    Use a sub-stream so the texel offsets are independent of the Sobol
+    scrambling (which also consumes the caller's seed).
+    """
+    rng = np.random.default_rng(np.random.SeedSequence(seed).spawn(1)[0])
     return rng.random((n, 2), dtype=np.float32)
 
 

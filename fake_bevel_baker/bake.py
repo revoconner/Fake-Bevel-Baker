@@ -18,9 +18,9 @@ import numpy as np
 from .bvh import BVH, LOCAL_MAX_HITS
 from .mesh_prep import PreparedMesh
 from .sampling import (
-    halton_2d,
     make_orthonormals_batch,
     per_texel_offsets,
+    sobol_sequence_2d,
     svm_bevel_cubic_eval,
     svm_bevel_cubic_sample,
 )
@@ -101,15 +101,16 @@ def bake(
     # Stack (Ng, T_base, B_base) so we can permute per-axis-choice
     frame = np.stack([Ng, T_base, B_base], axis=1)  # (N, 3, 3)
 
-    # Per-texel CP offsets
+    # Per-texel CP offsets + one scrambled Sobol sequence shared across texels
     offsets = per_texel_offsets(N, seed=seed)
+    qmc = sobol_sequence_2d(num_samples, seed=seed)
 
     sum_N = np.zeros((N, 3), dtype=np.float64)
 
     for s in range(num_samples):
         if progress is not None:
             progress(s, num_samples)
-        h1, h2 = halton_2d(s)
+        h1, h2 = float(qmc[s, 0]), float(qmc[s, 1])
         u1 = (h1 + offsets[:, 0]) % 1.0
         u2 = (h2 + offsets[:, 1]) % 1.0
 
