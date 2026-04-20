@@ -39,7 +39,7 @@ python.exe -m fake_bevel_baker.main
 --out "path to baked normal map file"."choose either png or .exr"
 --resolution 4096 
 --samples "higher is better but takes nore time" 
---angle "keep it exactly as your smoothing group, soften poly edge angle
+--angle "keep it exactly as your smoothing group, soften poly edge angle"
 --radius "in unit of file"
 --seed "is deterministic"
 --format ".png|.exr, if defining here keep out to only filename without extension"
