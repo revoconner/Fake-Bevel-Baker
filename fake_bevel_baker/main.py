@@ -10,10 +10,8 @@ Example:
 from __future__ import annotations
 
 import argparse
-import struct
 import sys
 import time
-import zlib
 from pathlib import Path
 
 import numpy as np
@@ -21,52 +19,28 @@ import numpy as np
 from .bake import bake, encode_normal_to_uint16
 from .bvh import BVH
 from .dilation import dilate
+from .image_io import encode_normal_to_float01, write_exr_rgb32, write_png_rgb16
 from .mesh_prep import prepare_mesh
 from .uv_raster import rasterize_uvs
 
 
-def _png_chunk(tag: bytes, data: bytes) -> bytes:
-    return (
-        struct.pack(">I", len(data))
-        + tag + data
-        + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
-    )
+def _save_tangent_png(path: Path, img_float: np.ndarray) -> None:
+    # Flip vertically: PNG row 0 is visually at top, but our raster has v=0 at row 0.
+    write_png_rgb16(path, encode_normal_to_uint16(img_float)[::-1])
 
 
-def _write_png_rgb16(path: Path, img_uint16: np.ndarray) -> None:
-    """Write a 16-bit RGB PNG. Pillow can't, imageio plugins not installed."""
-    if img_uint16.dtype != np.uint16 or img_uint16.ndim != 3 or img_uint16.shape[2] != 3:
-        raise ValueError("expected (H, W, 3) uint16 image")
-    h, w, _ = img_uint16.shape
-    be = img_uint16.astype(">u2").tobytes()
-    row_bytes = w * 3 * 2
-    body = bytearray()
-    for y in range(h):
-        body.append(0)  # filter type: None
-        body.extend(be[y * row_bytes : (y + 1) * row_bytes])
-    compressed = zlib.compress(bytes(body), 6)
-
-    ihdr = struct.pack(">IIBBBBB", w, h, 16, 2, 0, 0, 0)  # 16-bit, color_type 2 = RGB
-    with open(path, "wb") as f:
-        f.write(b"\x89PNG\r\n\x1a\n")
-        f.write(_png_chunk(b"IHDR", ihdr))
-        f.write(_png_chunk(b"IDAT", compressed))
-        f.write(_png_chunk(b"IEND", b""))
+def _save_tangent_exr(path: Path, img_float: np.ndarray) -> None:
+    # Encode [-1, 1] -> [0, 1] so PNG and EXR outputs agree in downstream tools.
+    write_exr_rgb32(path, encode_normal_to_float01(img_float)[::-1])
 
 
-def _write_png(path: Path, img_uint16: np.ndarray) -> None:
-    # Flip vertically so v=0 UV row sits at the bottom of the saved image
-    # (PNG rows go top-down; our raster has v=0 at row 0).
-    _write_png_rgb16(path, img_uint16[::-1])
-
-
-def _write_exr(path: Path, img_float: np.ndarray) -> None:
-    try:
-        import imageio.v3 as iio
-    except ImportError as e:
-        raise RuntimeError("imageio not installed") from e
-    img_flipped = img_float[::-1].astype(np.float32)
-    iio.imwrite(str(path), img_flipped)
+def _infer_format(explicit: str | None, out_path: Path) -> str:
+    if explicit is not None:
+        return explicit
+    ext = out_path.suffix.lower()
+    if ext == ".exr":
+        return "exr"
+    return "png"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -80,8 +54,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--radius", type=float, default=None,
                    help="Bevel radius in world units (default = 0.2%% of mesh bbox diagonal)")
     p.add_argument("--seed", type=int, default=0, help="RNG seed (default 0)")
-    p.add_argument("--format", choices=("png", "exr"), default="png",
-                   help="Output format (default png = 16-bit)")
+    p.add_argument("--format", choices=("png", "exr"), default=None,
+                   help="Output format; inferred from --out extension if omitted")
     p.add_argument("--dilation", type=int, default=16,
                    help="Edge padding ring width in texels (default 16, 0 disables)")
     args = p.parse_args(argv)
@@ -89,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     mesh_path = Path(args.mesh)
     out_path = Path(args.out)
     res = args.resolution
+    fmt = _infer_format(args.format, out_path)
 
     print(f"Loading mesh: {mesh_path}")
     t0 = time.time()
@@ -97,7 +72,6 @@ def main(argv: list[str] | None = None) -> int:
           f"{prep.split_faces.shape[0]} tris")
     print(f"  tangent mesh: {prep.tangent_positions.shape[0]} verts")
 
-    # Default radius = 0.2% of bbox diagonal
     if args.radius is None:
         bbox_min = prep.tangent_positions.min(axis=0)
         bbox_max = prep.tangent_positions.max(axis=0)
@@ -140,16 +114,16 @@ def main(argv: list[str] | None = None) -> int:
         world_img, _ = dilate(world_img, result.valid, radius_px=args.dilation)
         print(f"Dilation ({args.dilation}px): {time.time() - td:.2f}s")
 
-    if args.format == "png":
+    if fmt == "png":
         print(f"Writing 16-bit PNG: {out_path}")
-        _write_png(out_path, encode_normal_to_uint16(tan_img))
+        _save_tangent_png(out_path, tan_img)
         if args.out_world:
-            _write_png(Path(args.out_world), encode_normal_to_uint16(world_img))
+            _save_tangent_png(Path(args.out_world), world_img)
     else:
-        print(f"Writing EXR: {out_path}")
-        _write_exr(out_path, tan_img)
+        print(f"Writing 32-bit EXR: {out_path}")
+        _save_tangent_exr(out_path, tan_img)
         if args.out_world:
-            _write_exr(Path(args.out_world), world_img)
+            _save_tangent_exr(Path(args.out_world), world_img)
 
     print(f"Total: {time.time() - t0:.2f}s")
     return 0

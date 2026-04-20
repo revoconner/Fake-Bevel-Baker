@@ -12,10 +12,8 @@ trigger re-bakes; the Bake button is the only trigger.
 
 from __future__ import annotations
 
-import struct
 import sys
 import time
-import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -26,6 +24,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .bake import BakeResult, bake, encode_normal_to_uint16
 from .bvh import BVH
 from .dilation import dilate
+from .image_io import encode_normal_to_float01, write_exr_rgb32, write_png_rgb16
 from .mesh_prep import PreparedMesh, prepare_mesh
 from .uv_raster import rasterize_uvs
 
@@ -55,33 +54,13 @@ def _detect_units(path: Path) -> str:
     return "centimeters"
 
 
-def _write_png_rgb16(path: Path, img_uint16: np.ndarray) -> None:
-    h, w, _ = img_uint16.shape
-    be = img_uint16.astype(">u2").tobytes()
-    row_bytes = w * 3 * 2
-    body = bytearray()
-    for y in range(h):
-        body.append(0)
-        body.extend(be[y * row_bytes : (y + 1) * row_bytes])
-    compressed = zlib.compress(bytes(body), 6)
-    ihdr = struct.pack(">IIBBBBB", w, h, 16, 2, 0, 0, 0)
-
-    def chunk(tag: bytes, data: bytes) -> bytes:
-        return (
-            struct.pack(">I", len(data))
-            + tag + data
-            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
-        )
-    with open(path, "wb") as f:
-        f.write(b"\x89PNG\r\n\x1a\n")
-        f.write(chunk(b"IHDR", ihdr))
-        f.write(chunk(b"IDAT", compressed))
-        f.write(chunk(b"IEND", b""))
+def _save_tangent_png(path: Path, img_float: np.ndarray) -> None:
+    write_png_rgb16(path, encode_normal_to_uint16(img_float)[::-1])
 
 
-def _write_exr(path: Path, img_float: np.ndarray) -> None:
-    import imageio.v3 as iio
-    iio.imwrite(str(path), img_float.astype(np.float32))
+def _save_tangent_exr(path: Path, img_float: np.ndarray) -> None:
+    # Same [-1, 1] -> [0, 1] encoding as PNG so viewers interpret both identically.
+    write_exr_rgb32(path, encode_normal_to_float01(img_float)[::-1])
 
 
 def _numpy_to_qimage_rgb8(img_float: np.ndarray) -> QtGui.QImage:
@@ -189,9 +168,9 @@ class BakeWorker(QtCore.QObject):
             out = p.out_path
             out.parent.mkdir(parents=True, exist_ok=True)
             if p.fmt == "png":
-                _write_png_rgb16(out, encode_normal_to_uint16(tan_img)[::-1])
+                _save_tangent_png(out, tan_img)
             else:
-                _write_exr(out, tan_img[::-1])
+                _save_tangent_exr(out, tan_img)
 
             final = BakeResult(world_normal=world_img, tangent_normal=tan_img, valid=result.valid)
             self.finished.emit(final, time.time() - t0)
@@ -314,6 +293,7 @@ class MainWindow(QtWidgets.QMainWindow):
         fl.addRow("Mesh:", mh)
 
         self._out_edit = QtWidgets.QLineEdit()
+        self._out_edit.editingFinished.connect(self._on_out_edit_changed)
         ob = QtWidgets.QPushButton("Browse...")
         ob.clicked.connect(self._pick_output)
         oh = QtWidgets.QHBoxLayout()
@@ -342,6 +322,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._fmt_combo = QtWidgets.QComboBox()
         self._fmt_combo.addItem("PNG 16-bit", "png")
         self._fmt_combo.addItem("EXR 32-bit", "exr")
+        self._fmt_combo.currentIndexChanged.connect(self._on_fmt_combo_changed)
         grid.addRow("Format:", self._fmt_combo)
 
         self._dilation_spin = QtWidgets.QSpinBox()
@@ -403,6 +384,39 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if path:
             self._out_edit.setText(path)
+            self._sync_format_from_path(path)
+
+    # ----- Format/extension sync -----
+
+    def _sync_format_from_path(self, path_str: str) -> None:
+        """Set the format combo to match the output file extension."""
+        ext = Path(path_str).suffix.lower().lstrip(".")
+        target = {"exr": "exr", "png": "png"}.get(ext)
+        if target is None:
+            return
+        for i in range(self._fmt_combo.count()):
+            if self._fmt_combo.itemData(i) == target:
+                if self._fmt_combo.currentIndex() != i:
+                    self._fmt_combo.blockSignals(True)
+                    self._fmt_combo.setCurrentIndex(i)
+                    self._fmt_combo.blockSignals(False)
+                return
+
+    @QtCore.Slot()
+    def _on_out_edit_changed(self) -> None:
+        self._sync_format_from_path(self._out_edit.text())
+
+    @QtCore.Slot(int)
+    def _on_fmt_combo_changed(self, _idx: int) -> None:
+        """When the user picks a format, rewrite the extension on the output path."""
+        text = self._out_edit.text().strip()
+        if not text:
+            return
+        fmt = self._fmt_combo.currentData()
+        new_ext = ".png" if fmt == "png" else ".exr"
+        p = Path(text)
+        if p.suffix.lower() != new_ext:
+            self._out_edit.setText(str(p.with_suffix(new_ext)))
 
     # ----- Mesh load -----
 
@@ -458,6 +472,11 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         out_path = Path(out_text)
 
+        # Sync format combo to extension one last time (covers the case where
+        # the user typed an extension and pressed Bake without tabbing out).
+        self._sync_format_from_path(out_text)
+        fmt = str(self._fmt_combo.currentData())
+
         params = BakeParams(
             mesh_path=self._mesh_path,
             out_path=out_path,
@@ -467,7 +486,7 @@ class MainWindow(QtWidgets.QMainWindow):
             radius=float(self._radius.value()),
             seed=int(self._seed_spin.value()),
             dilation_px=int(self._dilation_spin.value()),
-            fmt=str(self._fmt_combo.currentData()),
+            fmt=fmt,
         )
 
         self._set_busy(True)
