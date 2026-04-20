@@ -62,6 +62,35 @@ def test_uv_outside_image_is_clipped():
     assert res.valid.all()
 
 
+def test_conservative_covers_strictly_more_than_center_only():
+    # Thin triangle whose edges pass close to texel centers: conservative
+    # raster must include texels that center-only would miss.
+    uvs = np.array(
+        [[0.10, 0.10], [0.90, 0.10], [0.50, 0.11]], dtype=np.float32
+    )
+    faces = np.array([[0, 1, 2]], dtype=np.int32)
+    res_c = rasterize_uvs(uvs, faces, 256, 256, conservative=True)
+    res_n = rasterize_uvs(uvs, faces, 256, 256, conservative=False)
+    assert res_c.valid.sum() > res_n.valid.sum()
+    # Conservative must be a superset of center-only.
+    assert np.all(res_c.valid[res_n.valid])
+
+
+def test_conservative_island_reaches_uv_boundary():
+    # A triangle whose vertex sits at u=0.5 exactly. Conservative raster
+    # should include texels on both sides of the half-line, so the island
+    # edge is not inset from the true UV boundary.
+    uvs = np.array(
+        [[0.00, 0.00], [0.50, 0.00], [0.50, 1.00]], dtype=np.float32
+    )
+    faces = np.array([[0, 1, 2]], dtype=np.int32)
+    res = rasterize_uvs(uvs, faces, 128, 128, conservative=True)
+    # Center column x=63 has center at u=(63.5)/128 ~ 0.496 -- inside.
+    # Next column x=64 center at u ~ 0.504 -- conservative should still
+    # include it because its left edge is at u=0.5 exactly (overlap).
+    assert res.valid[10, 64], "conservative should reach the 0.5 UV boundary"
+
+
 def test_cube_fixture_has_six_islands_coverage():
     from pathlib import Path
     from fake_bevel_baker.mesh_prep import prepare_mesh

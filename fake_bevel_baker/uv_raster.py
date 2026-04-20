@@ -1,12 +1,20 @@
 """Stage 3: UV rasterization.
 
-Walk each UV triangle's bounding box, test texel centers, and record
+Walk each UV triangle's bounding box and record
 (triangle_index, bary_u, bary_v, bary_w) for every covered texel. First
 write wins on UV overlaps.
 
 Texel convention: texel at integer pixel (x, y) has UV
 ((x + 0.5) / W, (y + 0.5) / H). Array layout is `[y, x]`; v=0 sits at
 y=0. PNG flipping, if needed, happens at write time.
+
+Coverage test (default) is **conservative**: a texel is valid if the
+triangle overlaps any part of its 1x1 square, not just the center. Done
+by expanding each edge's half-plane outward by half the max absolute
+pixel-space slope of the barycentrics. For texels whose center is
+outside the triangle (but overlap exists), the stored barycentrics are
+clamped to [0, 1] and renormalized so the sampled P lies on the nearest
+triangle edge.
 """
 
 from __future__ import annotations
@@ -29,6 +37,7 @@ def rasterize_uvs(
     width: int,
     height: int,
     edge_eps: float = 1e-5,
+    conservative: bool = True,
 ) -> RasterResult:
     """Rasterize triangles to a texel grid.
 
@@ -38,6 +47,9 @@ def rasterize_uvs(
     width, height: output resolution in texels.
     edge_eps: tolerance on barycentric edge tests. Positive values keep
               texels exactly on an edge classified as inside.
+    conservative: if True (default), mark a texel valid when the
+              triangle overlaps any part of its 1x1 square. If False,
+              use texel-center inclusion only.
     """
     if width < 1 or height < 1:
         raise ValueError("width and height must be >= 1")
@@ -81,7 +93,25 @@ def rasterize_uvs(
         v = ((c[1] - a[1]) * (px - c[0]) + (a[0] - c[0]) * (py - c[1])) * inv_denom
         w = 1.0 - u - v
 
-        inside = (u >= -edge_eps) & (v >= -edge_eps) & (w >= -edge_eps)
+        if conservative:
+            # Max bary increase over a 1x1 texel centered at (px, py) is
+            # 0.5 * (|du/dx| + |du/dy|) since bary is linear in pixel space.
+            du_dx = (b[1] - c[1]) * inv_denom
+            du_dy = (c[0] - b[0]) * inv_denom
+            dv_dx = (c[1] - a[1]) * inv_denom
+            dv_dy = (a[0] - c[0]) * inv_denom
+            dw_dx = -(du_dx + dv_dx)
+            dw_dy = -(du_dy + dv_dy)
+            slack_u = 0.5 * (abs(du_dx) + abs(du_dy))
+            slack_v = 0.5 * (abs(dv_dx) + abs(dv_dy))
+            slack_w = 0.5 * (abs(dw_dx) + abs(dw_dy))
+            inside = (
+                (u + slack_u >= -edge_eps)
+                & (v + slack_v >= -edge_eps)
+                & (w + slack_w >= -edge_eps)
+            )
+        else:
+            inside = (u >= -edge_eps) & (v >= -edge_eps) & (w >= -edge_eps)
         if not inside.any():
             continue
 
