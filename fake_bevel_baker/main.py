@@ -60,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="Edge padding ring width in texels (default 16, 0 disables)")
     p.add_argument("--denoise", choices=("none", "oidn"), default="none",
                    help="Post-bake denoiser applied to the world-space normal map")
+    p.add_argument("--denoise-quality", choices=("default", "balanced", "high"),
+                   default="high", help="OIDN quality preset (default: high)")
     args = p.parse_args(argv)
 
     mesh_path = Path(args.mesh)
@@ -114,9 +116,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.denoise == "oidn":
         from .denoise import denoise_world_normal
         td = time.time()
-        world_img = denoise_world_normal(world_img, result.valid)
+        # Per-texel geometric normal (face normal of the triangle the
+        # texel lands in). Fed to OIDN as the `normal` AOV.
+        Ng_map = np.zeros_like(world_img)
+        ys_v, xs_v = np.where(result.valid)
+        tri_ids_v = raster.tri_idx[ys_v, xs_v]
+        Ng_map[ys_v, xs_v] = prep.face_normals[tri_ids_v]
+        world_img = denoise_world_normal(
+            world_img, result.valid,
+            aux_normal=Ng_map,
+            quality=args.denoise_quality,
+        )
         tan_img = reproject_to_tangent_space(world_img, prep, raster)
-        print(f"Denoise (OIDN): {time.time() - td:.2f}s")
+        print(f"Denoise (OIDN, {args.denoise_quality}): {time.time() - td:.2f}s")
 
     if args.dilation > 0:
         td = time.time()
