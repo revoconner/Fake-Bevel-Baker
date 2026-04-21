@@ -325,3 +325,52 @@ def encode_normal_to_uint16(img: np.ndarray) -> np.ndarray:
     """Map unit-vector image [-1, 1] -> uint16 [0, 65535] with 0.5-offset encoding."""
     v = np.clip(img * 0.5 + 0.5, 0.0, 1.0)
     return (v * 65535.0 + 0.5).astype(np.uint16)
+
+
+def reproject_to_tangent_space(
+    world_normal: np.ndarray,
+    prep: PreparedMesh,
+    raster: RasterResult,
+) -> np.ndarray:
+    """Re-run world -> MikkT tangent-space projection for a modified world buffer.
+
+    Use this when a post-process (denoise, blur, etc.) has altered the
+    world-space normals after `bake()` returned and the tangent-space
+    output needs to be re-derived from the new world values.
+    """
+    if world_normal.shape != (*raster.valid.shape, 3):
+        raise ValueError("world_normal shape must match (H, W, 3)")
+
+    tangents_corner = compute_tangents(
+        prep.tangent_positions, prep.tangent_normals,
+        prep.tangent_uvs, prep.tangent_faces,
+    )
+
+    ys, xs = np.where(raster.valid)
+    if ys.size == 0:
+        return np.zeros_like(world_normal)
+
+    tri_ids = raster.tri_idx[ys, xs].astype(np.int64)
+    barys = raster.bary[ys, xs].astype(np.float32)
+    tf = prep.tangent_faces
+
+    T_corner = tangents_corner[tri_ids]
+    N_corner = prep.tangent_normals[tf[tri_ids]]
+    T_interp = (T_corner[..., :3] * barys[..., None]).sum(axis=1)
+    N_tan_interp = (N_corner * barys[..., None]).sum(axis=1)
+    N_tan_interp /= np.maximum(np.linalg.norm(N_tan_interp, axis=-1, keepdims=True), 1e-20)
+    T_interp -= (T_interp * N_tan_interp).sum(axis=-1, keepdims=True) * N_tan_interp
+    T_interp /= np.maximum(np.linalg.norm(T_interp, axis=-1, keepdims=True), 1e-20)
+    T_sign = T_corner[:, 0, 3]
+    B_interp = T_sign[:, None] * np.cross(N_tan_interp, T_interp)
+
+    Nw = world_normal[ys, xs]
+    t_dot = (Nw * T_interp).sum(axis=-1)
+    b_dot = (Nw * B_interp).sum(axis=-1)
+    n_dot = (Nw * N_tan_interp).sum(axis=-1)
+    N_tan = np.stack([t_dot, b_dot, n_dot], axis=-1)
+    N_tan /= np.maximum(np.linalg.norm(N_tan, axis=-1, keepdims=True), 1e-20)
+
+    out = np.zeros_like(world_normal)
+    out[ys, xs] = N_tan.astype(np.float32)
+    return out

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .bake import bake, encode_normal_to_uint16
+from .bake import bake, encode_normal_to_uint16, reproject_to_tangent_space
 from .bvh import BVH
 from .dilation import dilate
 from .image_io import encode_normal_to_float01, write_exr_rgb32, write_png_rgb16
@@ -58,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="Output format; inferred from --out extension if omitted")
     p.add_argument("--dilation", type=int, default=16,
                    help="Edge padding ring width in texels (default 16, 0 disables)")
+    p.add_argument("--denoise", choices=("none", "oidn"), default="none",
+                   help="Post-bake denoiser applied to the world-space normal map")
     args = p.parse_args(argv)
 
     mesh_path = Path(args.mesh)
@@ -108,6 +110,14 @@ def main(argv: list[str] | None = None) -> int:
 
     tan_img = result.tangent_normal
     world_img = result.world_normal
+
+    if args.denoise == "oidn":
+        from .denoise import denoise_world_normal
+        td = time.time()
+        world_img = denoise_world_normal(world_img, result.valid)
+        tan_img = reproject_to_tangent_space(world_img, prep, raster)
+        print(f"Denoise (OIDN): {time.time() - td:.2f}s")
+
     if args.dilation > 0:
         td = time.time()
         tan_img, _ = dilate(tan_img, result.valid, radius_px=args.dilation)
