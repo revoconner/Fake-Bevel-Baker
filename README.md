@@ -47,6 +47,7 @@ python.exe -m fake_bevel_baker.main
 --seed "is deterministic"
 --format ".png|.exr, if defining here keep out to only filename without extension"
 --out-world "world space normal map"
+--denoise "OIDN"
 ```
 
 **EXAMPLE**

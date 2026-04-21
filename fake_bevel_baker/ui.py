@@ -21,7 +21,12 @@ from typing import Optional
 import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from .bake import BakeResult, bake, encode_normal_to_uint16
+from .bake import (
+    BakeResult,
+    bake,
+    encode_normal_to_uint16,
+    reproject_to_tangent_space,
+)
 from .bvh import BVH
 from .dilation import dilate
 from .image_io import encode_normal_to_float01, write_exr_rgb32, write_png_rgb16
@@ -135,6 +140,8 @@ class BakeParams:
     seed: int
     dilation_px: int
     fmt: str  # "png" | "exr"
+    denoise: bool = False
+    denoise_quality: str = "high"  # "default" | "balanced" | "high"
 
 
 class BakeWorker(QtCore.QObject):
@@ -161,6 +168,20 @@ class BakeWorker(QtCore.QObject):
             )
             tan_img = result.tangent_normal
             world_img = result.world_normal
+
+            if p.denoise:
+                from .denoise import denoise_world_normal
+                ys_v, xs_v = np.where(result.valid)
+                tri_ids_v = raster.tri_idx[ys_v, xs_v]
+                Ng_map = np.zeros_like(world_img)
+                Ng_map[ys_v, xs_v] = prep.face_normals[tri_ids_v]
+                world_img = denoise_world_normal(
+                    world_img, result.valid,
+                    aux_normal=Ng_map,
+                    quality=p.denoise_quality,
+                )
+                tan_img = reproject_to_tangent_space(world_img, prep, raster)
+
             if p.dilation_px > 0:
                 tan_img, _ = dilate(tan_img, result.valid, p.dilation_px)
                 world_img, _ = dilate(world_img, result.valid, p.dilation_px)
@@ -335,6 +356,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._seed_spin.setValue(0)
         grid.addRow("Seed:", self._seed_spin)
 
+        self._denoise_check = QtWidgets.QCheckBox("Denoise (OIDN)")
+        self._denoise_check.setChecked(False)
+        self._denoise_check.toggled.connect(self._on_denoise_toggled)
+        grid.addRow("Post-process:", self._denoise_check)
+
+        self._denoise_quality_combo = QtWidgets.QComboBox()
+        self._denoise_quality_combo.addItem("High", "high")
+        self._denoise_quality_combo.addItem("Balanced", "balanced")
+        self._denoise_quality_combo.addItem("Default", "default")
+        self._denoise_quality_combo.setEnabled(False)
+        grid.addRow("Denoise quality:", self._denoise_quality_combo)
+
         sv.addLayout(grid)
         v.addWidget(settings)
 
@@ -405,6 +438,10 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.Slot()
     def _on_out_edit_changed(self) -> None:
         self._sync_format_from_path(self._out_edit.text())
+
+    @QtCore.Slot(bool)
+    def _on_denoise_toggled(self, enabled: bool) -> None:
+        self._denoise_quality_combo.setEnabled(enabled)
 
     @QtCore.Slot(int)
     def _on_fmt_combo_changed(self, _idx: int) -> None:
@@ -487,6 +524,8 @@ class MainWindow(QtWidgets.QMainWindow):
             seed=int(self._seed_spin.value()),
             dilation_px=int(self._dilation_spin.value()),
             fmt=fmt,
+            denoise=bool(self._denoise_check.isChecked()),
+            denoise_quality=str(self._denoise_quality_combo.currentData()),
         )
 
         self._set_busy(True)
