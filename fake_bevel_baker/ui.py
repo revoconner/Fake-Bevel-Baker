@@ -417,6 +417,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if path:
             self._out_edit.setText(path)
+            self._last_auto_out = None  # user explicitly chose -> stop auto-replacing
             self._sync_format_from_path(path)
 
     # ----- Format/extension sync -----
@@ -437,6 +438,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot()
     def _on_out_edit_changed(self) -> None:
+        # User typed something -> they own the output path now.
+        self._last_auto_out = None
         self._sync_format_from_path(self._out_edit.text())
 
     @QtCore.Slot(bool)
@@ -453,7 +456,14 @@ class MainWindow(QtWidgets.QMainWindow):
         new_ext = ".png" if fmt == "png" else ".exr"
         p = Path(text)
         if p.suffix.lower() != new_ext:
-            self._out_edit.setText(str(p.with_suffix(new_ext)))
+            new_path = str(p.with_suffix(new_ext))
+            # If the current output was an auto-derived path, keep tracking
+            # the new one (with swapped extension) so a subsequent mesh
+            # change still replaces it.
+            was_auto = (text == getattr(self, "_last_auto_out", None))
+            self._out_edit.setText(new_path)
+            if was_auto:
+                self._last_auto_out = new_path
 
     # ----- Mesh load -----
 
@@ -471,10 +481,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._prep = prep
         self._mesh_edit.setText(str(path))
 
-        # Auto output path if not set
-        if not self._out_edit.text():
-            ext = "png" if self._fmt_combo.currentData() == "png" else "exr"
-            self._out_edit.setText(str(path.with_suffix(f".{ext}")))
+        # Auto output path. Populate on first load, and re-derive it
+        # whenever the current output path still matches the *previous*
+        # mesh (i.e. the user never manually picked a specific output).
+        # If the user typed their own output path, leave it alone.
+        ext = "png" if self._fmt_combo.currentData() == "png" else "exr"
+        new_default = str(path.with_suffix(f".{ext}"))
+        current = self._out_edit.text().strip()
+        is_auto = (not current) or (current == getattr(self, "_last_auto_out", None))
+        if is_auto:
+            self._out_edit.setText(new_default)
+            self._last_auto_out = new_default
 
         # BBox + units
         mn = prep.tangent_positions.min(axis=0)
